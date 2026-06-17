@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release-version:
+        description: 'Release version, e.g. 3.0.0 (no leading "v")'
+        required: true
+        type: string
+      next-snapshot:
+        description: 'Next development version, e.g. 3.0.1-SNAPSHOT'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Verify tag does not already exist
+        run: |
+          if git rev-parse "v${{ inputs.release-version }}" >/dev/null 2>&1; then
+            echo "Tag v${{ inputs.release-version }} already exists. Aborting."
+            exit 1
+          fi
+
+      - name: Set release version
+        run: mvn -B versions:set -DnewVersion=${{ inputs.release-version }} -DgenerateBackupPoms=false
+
+      - name: Build and test
+        run: mvn -B clean package
+
+      - name: Commit release version and tag
+        run: |
+          git add pom.xml
+          git commit -m "release: v${{ inputs.release-version }}"
+          git tag -a "v${{ inputs.release-version }}" -m "v${{ inputs.release-version }}"
+
+      - name: Set next development version
+        run: |
+          mvn -B versions:set -DnewVersion=${{ inputs.next-snapshot }} -DgenerateBackupPoms=false
+          git add pom.xml
+          git commit -m "chore: start next development cycle (${{ inputs.next-snapshot }})"
+
+      - name: Push commits and tag
+        run: git push origin HEAD --follow-tags
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ inputs.release-version }}"
+          name: "v${{ inputs.release-version }}"
+          generate_release_notes: true
+          files: target/markdown-${{ inputs.release-version }}.xar
